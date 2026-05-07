@@ -4,6 +4,7 @@ extends EditorPlugin
 class FileLogger extends Logger:
 	var log_path: String = "res://logs/editor.log"
 	var _ready: bool = false
+	var _mutex := Mutex.new()
 
 	func _init() -> void:
 		_setup()
@@ -40,19 +41,70 @@ class FileLogger extends Logger:
 		print("FileLogger initialized: %s" % logs_dir)
 
 	func _log_message(message: String, error: bool) -> void:
+		var level := "STDERR" if error else "INFO"
+		_write_log(level, message)
+
+	func _log_error(
+		function: String,
+		file: String,
+		line: int,
+		code: String,
+		rationale: String,
+		_editor_notify: bool,
+		error_type: int,
+		_script_backtraces: Array[ScriptBacktrace]
+	) -> void:
+		var level := _get_error_level(error_type)
+		var details := rationale if not rationale.is_empty() else code
+		var location := _get_error_location(function, file, line)
+		var message := details
+
+		if not location.is_empty() and not details.is_empty():
+			message = "%s - %s" % [location, details]
+		elif not location.is_empty():
+			message = location
+
+		_write_log(level, message)
+
+	func _get_error_level(error_type: int) -> String:
+		match error_type:
+			0:
+				return "ERROR"
+			1:
+				return "WARNING"
+			2:
+				return "SCRIPT"
+			3:
+				return "SHADER"
+			_:
+				return "ERROR"
+
+	func _get_error_location(function: String, file: String, line: int) -> String:
+		if not file.is_empty() and line > 0:
+			return "%s:%d" % [file, line]
+		if not file.is_empty():
+			return file
+		return function
+
+	func _write_log(level: String, message: String) -> void:
 		if not _ready:
 			return
 
-		var level := "ERROR" if error else "INFO"
 		var timestamp := Time.get_datetime_string_from_system()
+		var clean_message := message.rstrip("\r\n")
+
+		_mutex.lock()
 		var file := FileAccess.open(log_path, FileAccess.READ_WRITE)
 		if file == null:
+			_mutex.unlock()
 			return
 
 		file.seek_end()
-		file.store_line("[%s] [%s] %s" % [timestamp, level, message])
+		for line_text in clean_message.split("\n", false):
+			file.store_line("[%s] [%s] %s" % [timestamp, level, line_text.rstrip("\r")])
 		file.flush()
 		file.close()
+		_mutex.unlock()
 
 var _logger: FileLogger
 
